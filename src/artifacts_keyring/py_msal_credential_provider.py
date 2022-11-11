@@ -4,6 +4,8 @@ import logging
 import requests
 from .support import DefaultAzureCredentialWithDevicecode
 from azure.core.exceptions import ClientAuthenticationError
+from azure.identity import DeviceCodeCredential
+
 
 # logging.getLogger("azure.identity._credentials.chained").setLevel(logging.ERROR)
 logging.getLogger("azure.identity._credentials.managed_identity").setLevel(logging.ERROR)
@@ -101,12 +103,30 @@ class PyMSALCredentialProvider:
         except ClientAuthenticationError as e:
             if 'Azure Active Directory error' not in str(e):
                 raise e
-            msg = (f"Caught {e.__class__}: {str(e)}. This is most likely due to a "
-                    "an expired token in the shared token cache. To mitigate, you can:"
-                    "1) retry the same command, or 2) sign in with az cli, or"
-                    "3) retry the same command with the environment variable "
-                    "`MSAL_EXCLUDE_SHARED_TOKEN_CACHE=True` set.")
-            raise ClientAuthenticationError(msg)
+            # msg = (f"Caught {e.__class__}: {str(e)}. This is most likely due to a "
+            #         "an expired token in the shared token cache. To mitigate, you can:"
+            #         "1) retry the same command, or 2) sign in with az cli, or"
+            #         "3) retry the same command with the environment variable "
+            #         "`MSAL_EXCLUDE_SHARED_TOKEN_CACHE=True` set.")
+            # raise ClientAuthenticationError(msg)
+            """ 
+            DefaultAzureCredential raises an exception when there is a token
+            found in the cache but the token has expired. This issue has
+            been raised https://github.com/Azure/azure-sdk-for-python/issues/21718#issuecomment-974225195 
+            and it is a design choice of the azure-identity developers. However,
+            for our use case, the fallback below requires user intervention and therefore
+            the concerns about accidentally operating on the incorrect account are not 
+            applicable. Hence we explicitly catch the error and initiate the 
+            DeviceCode flow. This behaviour is the same as re-running the command 
+            with `MSAL_EXCLUDE_SHARED_TOKEN_CACHE=True`, which has the same effect as 
+            the suggestion linked in the GH issue above.
+            """
+            print(f"Caught {e.__class__}: {str(e)}! Falling back to devicecode flow")
+            token = DeviceCodeCredential(
+                authority=authority,
+                tenant_id=tenant_id,
+                client_id=self._oauth_client_id
+            ).get_token(self._oauth_scope).token
         return token
 
     def _exchange_bearer_for_pat(self, bearer_token):
